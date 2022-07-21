@@ -1,0 +1,73 @@
+name: Deploy to cloudrun using Terraform
+
+on:
+  push:
+    branches:
+      - tf/tg
+
+env:
+  SERVICE_ACCOUNT: ${{ secrets.SERVICE_ACCOUNT }}
+  GOOGLE_CREDENTIALS: ${{ secrets.GCP_GKE_TF_SA_KEY }}
+  REPO_NAME: cweb-pilot-optout-be
+  RUN_REGION: europe-west1
+
+jobs:
+  deploy-to-cloudrun:
+    name: "Setup, Build, and Deploy CloudRun- '${{github.ref}}'"
+    runs-on: ubuntu-latest
+
+    steps:
+    - name: Checkout
+      uses: actions/checkout@v2
+	  
+    - uses: GoogleCloudPlatform/github-actions/setup-gcloud@master
+      with:
+        service_account_key: ${{secrets.SERVICE_ACCOUNT}}
+        export_default_credentials: true
+        project_id: ${{ secrets.GCP_PROJECT_ID }}   
+		
+    - name: Build
+      run: |-
+        gcloud auth configure-docker
+        docker build -t gcr.io/PROJECT_ID/REPO_NAME:$GITHUB_SHA
+		
+    - name: push
+      run: |-
+        docker push gcr.io/PROJECT_ID/REPO_NAME:$GITHUB_SHA
+
+    - name: Setup Terraform
+      uses: hashicorp/setup-terraform@v1
+
+    - name: Terraform Init
+      run: terraform init
+      working-directory: ./cweb-mgmt/tf-scripts/
+      env:
+        GOOGLE_CREDENTIALS: ${{secrets.GCP_GKE_TF_SA_KEY}}
+
+    - name: Terraform Format
+      run: terraform fmt -check
+
+    - name: Terraform Plan
+      run: |-
+        terraform plan \
+          -var="project_id=$GCP_PROJECT_ID" \
+          -var="region=$RUN_REGION" \
+          -var="service_name=$REPO_NAME" \
+          -var="docker_image=gcr.io/$GCP_PROJECT_ID/$REPO_NAME:$GITHUB_SHA" \
+          -var="port=3040" \
+          -var="cloudrun_service_account=cloudrun-identity@$GCP_PROJECT_ID.iam.gserviceaccount.com" \
+          -var="invoker_member=allUsers" \
+          -var="vendor=gcp" \
+          -var="vendor_service=cloudrun" \
+          -var="env_key=GOOGLE_CLOUD_PROJECT" \
+          -var="env_value=ingka-icf-cweboptout-dev" \
+          -out=PLAN
+      working-directory: ./cweb-mgmt/tf-scripts/
+      env:
+        GOOGLE_CREDENTIALS: ${{secrets.GCP_GKE_TF_SA_KEY}}
+
+    - name: Terraform Apply
+      run: terraform apply PLAN
+      working-directory: ./cweb-mgmt/tf-scripts/
+      env:
+        GOOGLE_CREDENTIALS: ${{secrets.GCP_GKE_TF_SA_KEY}}  
